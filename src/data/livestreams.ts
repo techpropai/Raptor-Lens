@@ -9,13 +9,13 @@ import { LivestreamCam } from '../types/raptor';
 export const LIVESTREAM_CHANNELS: LivestreamCam[] = [
   {
     id: 'stream-barbury-castle-livecam',
-    title: 'Barbury Castle Downland Field Cam (30x Telephoto)',
-    location: 'Wessex Downland Field (Facing Barbury Castle 3km south)',
-    channelName: 'Barbury Castle Community Raptor Watch',
-    youtubeId: '9gkrkcqHQ78', // Official live field stream (configurable with custom feed)
-    channelUrl: 'https://www.youtube.com/watch?v=9gkrkcqHQ78', // Watch link and channel portal
+    title: 'UK Peregrine & Downland Raptor Cam (30x Optical)',
+    location: 'Wessex Escarpment / Downland Roost (Facing Barbury Airspace)',
+    channelName: 'UK Raptor Watch & Peregrine Cam',
+    youtubeId: 'GAxREl6-fJs', // Active verified live stream
+    channelUrl: 'https://www.youtube.com/watch?v=GAxREl6-fJs',
     status: 'LIVE',
-    description: 'Direct 30x optical zoom telephoto field camera focused across open Wiltshire chalk pasture towards the historic Iron Age ramparts of Barbury Castle (elevation 268m ASL, 3.0 km distance). Dedicated to tracking Red Kite kettles, hunting Buzzards, and low-quartering Harriers along the northern downland scarp.',
+    description: 'Direct high-definition optical telephoto camera tracking resident UK raptors, Peregrine Falcons, hunting Buzzards, and low-quartering Harriers along the downland ridge.',
     elevation: '268m ASL (Target Hillfort)',
     gridRef: 'SU 149 763 (Target)',
     viewers: 412,

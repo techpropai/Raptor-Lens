@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Mountain, 
   Wind, 
@@ -25,7 +25,14 @@ import {
   RefreshCw,
   CheckCircle,
   X,
-  ExternalLink as ExternalLinkIcon
+  Camera,
+  FlipHorizontal,
+  ZoomIn,
+  ZoomOut,
+  Wifi,
+  Info,
+  Target,
+  Download
 } from 'lucide-react';
 import { LivestreamCam, RssDispatch } from '../types/raptor';
 import { LIVESTREAM_CHANNELS } from '../data/livestreams';
@@ -39,7 +46,12 @@ import {
   buildYouTubeEmbedSrc,
   StreamPlayMode,
   DEFAULT_CAMERA_VIDEO_ID,
-  DEMO_NATURE_VIDEO_ID
+  DEMO_NATURE_VIDEO_ID,
+  POPULAR_CAMERA_PRESETS,
+  PEREGRINE_UK_VIDEO_ID,
+  EAGLE_LIVE_VIDEO_ID,
+  isLocalIpAddress,
+  formatLocalIpUrl
 } from '../utils/youtube';
 
 interface SummitTrailConditionsViewProps {
@@ -62,7 +74,10 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
   const currentCam = LIVESTREAM_CHANNELS[0];
   const [customVideoId, setCustomVideoId] = useState<string>(() => {
     try {
-      return localStorage.getItem('raptorlens_custom_cam') || '';
+      const saved = localStorage.getItem('raptorlens_custom_cam') || '';
+      // Migrate old offline 401 video ID
+      if (saved === '9gkrkcqHQ78') return DEFAULT_CAMERA_VIDEO_ID;
+      return saved;
     } catch {
       return '';
     }
@@ -77,7 +92,7 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
   const [streamMode, setStreamMode] = useState<StreamPlayMode>(() => {
     try {
       const saved = localStorage.getItem('raptorlens_stream_mode');
-      if (saved === 'video' || saved === 'channel' || saved === 'demo') return saved;
+      if (saved === 'video' || saved === 'channel' || saved === 'demo' || saved === 'webcam') return saved;
       return 'video';
     } catch {
       return 'video';
@@ -92,6 +107,117 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
   const [quickSpotSpecies, setQuickSpotSpecies] = useState<string>('Red Kite');
   const [quickSpotCount, setQuickSpotCount] = useState<number>(1);
   const [quickSpotNotes, setQuickSpotNotes] = useState<string>('');
+
+  // Device Camera (Webcam / Smartphone Camera) State
+  const [isDeviceCamActive, setIsDeviceCamActive] = useState<boolean>(false);
+  const [deviceCamFacing, setDeviceCamFacing] = useState<'environment' | 'user'>('environment');
+  const [deviceCamZoom, setDeviceCamZoom] = useState<number>(1);
+  const [deviceCamError, setDeviceCamError] = useState<string | null>(null);
+  const [deviceCamLoading, setDeviceCamLoading] = useState<boolean>(false);
+  const [isReticleActive, setIsReticleActive] = useState<boolean>(true);
+  const [snapshotSuccess, setSnapshotSuccess] = useState<string | null>(null);
+  const deviceVideoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
+  const startDeviceCamera = async (facing: 'environment' | 'user' = deviceCamFacing) => {
+    setDeviceCamLoading(true);
+    setDeviceCamError(null);
+    try {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      mediaStreamRef.current = stream;
+      if (deviceVideoRef.current) {
+        deviceVideoRef.current.srcObject = stream;
+        deviceVideoRef.current.play().catch(() => {});
+      }
+      setIsDeviceCamActive(true);
+      setStreamMode('webcam');
+      tacticalAudio.playConfirmChime();
+    } catch (err: any) {
+      console.warn('Camera access issue:', err);
+      let msg = 'Could not access device camera.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission was denied. Please allow camera access in your browser address bar.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        msg = 'No video camera was found on this device.';
+      } else if (err.name === 'NotReadableError') {
+        msg = 'Your camera is already in use by another application.';
+      }
+      setDeviceCamError(msg);
+    } finally {
+      setDeviceCamLoading(false);
+    }
+  };
+
+  const stopDeviceCamera = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+    }
+    if (deviceVideoRef.current) {
+      deviceVideoRef.current.srcObject = null;
+    }
+    setIsDeviceCamActive(false);
+    setStreamMode('video');
+    setDeviceCamError(null);
+    tacticalAudio.playRadarPing(700);
+  };
+
+  const toggleFacingMode = () => {
+    const nextFacing = deviceCamFacing === 'environment' ? 'user' : 'environment';
+    setDeviceCamFacing(nextFacing);
+    tacticalAudio.playRadarPing(850);
+    startDeviceCamera(nextFacing);
+  };
+
+  const takeSnapshot = () => {
+    if (!deviceVideoRef.current) return;
+    try {
+      tacticalAudio.playRadarPing(950);
+      const video = deviceVideoRef.current;
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        const link = document.createElement('a');
+        link.download = `raptorlens-spotter-${Date.now()}.jpg`;
+        link.href = dataUrl;
+        link.click();
+        setSnapshotSuccess('Photo captured and saved to your downloads!');
+        setTimeout(() => setSnapshotSuccess(null), 4000);
+      }
+    } catch (e) {
+      console.warn('Snapshot error:', e);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
+
+  // Sync stream to device video ref if active
+  useEffect(() => {
+    if (isDeviceCamActive && mediaStreamRef.current && deviceVideoRef.current) {
+      deviceVideoRef.current.srcObject = mediaStreamRef.current;
+      deviceVideoRef.current.play().catch(() => {});
+    }
+  }, [isDeviceCamActive]);
 
   useEffect(() => {
     try {
@@ -203,97 +329,114 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto animate-fadeIn">
-      {/* 1. Live Summit Camera (Clean & Focused) */}
+      {/* 1. Live Summit Camera & Optical Spotter Stage */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl relative">
-        {/* Stream Header */}
-        <div className="bg-neutral-900/95 border-b border-neutral-800 px-4 py-2.5 flex items-center justify-between text-xs font-mono-tactical flex-wrap gap-2">
-          <div className="flex items-center gap-2">
+        {/* Stream Header & Source Switcher */}
+        <div className="bg-neutral-900/95 border-b border-neutral-800 px-3.5 sm:px-4 py-2.5 flex items-center justify-between text-xs font-mono-tactical flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
             <span className="font-bold text-neutral-100">
-              {streamMode === 'channel' ? 'Barbury Castle YouTube Channel Broadcast' : 'Barbury Castle Summit Cam'}
+              {streamMode === 'webcam' 
+                ? 'Device Optical Spotter Cam (Live Webcam)' 
+                : streamMode === 'channel' 
+                ? 'Official YouTube Channel Broadcast' 
+                : streamMode === 'demo'
+                ? '4K Wildlife Optical Demo Cam'
+                : isLocalIpAddress(activeVideoId)
+                ? 'Local Network Camera (Wi-Fi IP)'
+                : 'Live Optical Raptor Cam'}
             </span>
             <span className="text-[10px] text-neutral-400 hidden sm:inline">
-              • 268m ASL • The Ridgeway
+              • 268m ASL • Wessex Scarp
             </span>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Direct Link to YouTube Channel */}
-            <a
-              href={resolvedChannelUrl}
-              target="_blank"
-              rel="noreferrer"
-              onClick={() => tacticalAudio.playRadarPing(880)}
-              className="bg-red-600 hover:bg-red-500 text-white px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
-              title="Open YouTube Channel in new tab"
-            >
-              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-              </svg>
-              <span className="hidden sm:inline">YouTube Channel</span>
-              <span className="sm:hidden">Channel</span>
-              <ExternalLink className="w-3 h-3 text-red-200" />
-            </a>
-
-            {/* Stream Mode Switcher */}
-            <div className="flex items-center bg-neutral-950 border border-neutral-750 rounded-lg p-0.5 text-[10px]">
+            {/* Source Switcher Mode Pills */}
+            <div className="flex items-center bg-neutral-950 border border-neutral-750 rounded-xl p-0.5 text-[10px]">
               <button
                 type="button"
                 onClick={() => {
                   tacticalAudio.playRadarPing(780);
+                  if (isDeviceCamActive) stopDeviceCamera();
                   setStreamMode('video');
                 }}
-                className={`px-2 py-0.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer ${
                   streamMode === 'video'
                     ? 'bg-amber-500 text-neutral-950 font-bold'
                     : 'text-neutral-400 hover:text-neutral-200'
                 }`}
-                title="Play my camera feed ID (9gkrkcqHQ78)"
+                title="Watch verified live optical raptor stream"
               >
-                📹 My Cam
+                🦅 Live Stream
               </button>
+
               <button
                 type="button"
                 onClick={() => {
-                  tacticalAudio.playRadarPing(880);
-                  setStreamMode('channel');
+                  tacticalAudio.playRadarPing(850);
+                  if (!isDeviceCamActive) {
+                    startDeviceCamera();
+                  } else {
+                    stopDeviceCamera();
+                  }
                 }}
-                className={`px-2 py-0.5 rounded-md font-semibold transition-colors cursor-pointer ${
-                  streamMode === 'channel'
-                    ? 'bg-red-600 text-white font-bold'
-                    : 'text-neutral-400 hover:text-neutral-200'
+                className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer flex items-center gap-1 ${
+                  streamMode === 'webcam'
+                    ? 'bg-cyan-500 text-neutral-950 font-bold'
+                    : 'text-neutral-400 hover:text-cyan-300'
                 }`}
-                title="Play YouTube Channel live broadcast"
+                title="Use your phone or laptop webcam as a live spotting camera"
               >
-                📺 Channel
+                <Camera className="w-3 h-3" />
+                <span>{isDeviceCamActive ? 'My Cam (ON)' : 'My Camera'}</span>
               </button>
+
               <button
                 type="button"
                 onClick={() => {
                   tacticalAudio.playRadarPing(920);
+                  if (isDeviceCamActive) stopDeviceCamera();
                   setStreamMode('demo');
                 }}
-                className={`px-2 py-0.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                className={`px-2 py-1 rounded-lg font-semibold transition-colors cursor-pointer ${
                   streamMode === 'demo'
                     ? 'bg-emerald-600 text-white font-bold'
                     : 'text-neutral-400 hover:text-emerald-300'
                 }`}
-                title="Test working 4K nature video to verify video playback immediately"
+                title="Verify video playback with guaranteed 4K nature video"
               >
-                🌿 Demo Test
+                🌿 4K Demo
               </button>
             </div>
+
+            {/* Direct Channel Link */}
+            {streamMode !== 'webcam' && (
+              <a
+                href={resolvedChannelUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => tacticalAudio.playRadarPing(880)}
+                className="bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                title="Open YouTube Channel in new tab"
+              >
+                <svg className="w-3.5 h-3.5 fill-current text-red-400" viewBox="0 0 24 24">
+                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                </svg>
+                <span className="hidden sm:inline">Channel ↗</span>
+              </a>
+            )}
 
             <button
               onClick={() => {
                 tacticalAudio.playRadarPing(800);
                 setShowTroubleshootModal(true);
               }}
-              className="bg-neutral-800 hover:bg-neutral-750 text-amber-300 border border-amber-500/30 px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-              title="Why is my stream black or saying Video Unavailable?"
+              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+              title="Camera not showing? Click here for troubleshooting and 1-click fixes"
             >
               <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">Stream Help</span>
+              <span>Camera Help</span>
             </button>
 
             <button
@@ -302,10 +445,10 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
                 setShowFeedInput(!showFeedInput);
               }}
               className="bg-neutral-800 hover:bg-neutral-750 text-neutral-300 border border-neutral-700 px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-              title="Configure camera video link and YouTube channel"
+              title="Configure custom video ID, IP camera, or YouTube URL"
             >
               <Settings className="w-3.5 h-3.5 text-neutral-400" />
-              <span>{showFeedInput ? 'Close Config' : 'Channel / Feed Settings'}</span>
+              <span>{showFeedInput ? 'Close' : 'Feed Settings'}</span>
             </button>
 
             <button
@@ -316,31 +459,73 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
               className="bg-amber-500 hover:bg-amber-400 text-neutral-950 px-2.5 py-1 rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors shadow"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>+ Log Sighting</span>
-            </button>
-            <button
-              onClick={() => {
-                tacticalAudio.playRadarPing(920);
-                onSwitchToRadar();
-              }}
-              className="bg-neutral-800 hover:bg-neutral-750 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-            >
-              <span>🦅 Airspace Radar</span>
-              <ChevronRight className="w-3.5 h-3.5" />
+              <span>+ Log Spot</span>
             </button>
           </div>
         </div>
 
-        {/* Stream Health & Diagnostics Bar */}
-        {streamMode === 'demo' ? (
+        {/* Snapshot Success Toast */}
+        {snapshotSuccess && (
+          <div className="bg-emerald-950 border-b border-emerald-500/40 px-4 py-2 text-xs font-mono-tactical text-emerald-300 flex items-center justify-between animate-fadeIn">
+            <span className="flex items-center gap-1.5">
+              <CheckCircle className="w-4 h-4 text-emerald-400" />
+              <span>{snapshotSuccess}</span>
+            </span>
+            <button onClick={() => setSnapshotSuccess(null)} className="text-emerald-400 hover:text-emerald-200">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Stream Health & Diagnostic Notice Bar */}
+        {streamMode === 'webcam' ? (
+          <div className="bg-cyan-950/70 border-b border-cyan-500/40 px-3.5 sm:px-4 py-2 flex items-center justify-between text-xs font-mono-tactical flex-wrap gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
+              <span className="text-cyan-300 font-bold">
+                DEVICE CAMERA ACTIVE: Real-time optical spotter lens
+              </span>
+              <span className="text-neutral-400 text-[11px] hidden md:inline">
+                • Use zoom slider &amp; reticle below to identify birds in the field
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={takeSnapshot}
+                className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors shadow"
+                title="Capture still snapshot photo"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Snap Photo</span>
+              </button>
+              <button
+                type="button"
+                onClick={toggleFacingMode}
+                className="px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-700 text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                title="Switch between front and rear cameras"
+              >
+                <FlipHorizontal className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Flip Cam</span>
+              </button>
+              <button
+                type="button"
+                onClick={stopDeviceCamera}
+                className="px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-rose-300 border border-neutral-700 text-[11px] cursor-pointer"
+              >
+                Exit Cam
+              </button>
+            </div>
+          </div>
+        ) : streamMode === 'demo' ? (
           <div className="bg-emerald-950/70 border-b border-emerald-500/40 px-3.5 sm:px-4 py-2 flex items-center justify-between text-xs font-mono-tactical flex-wrap gap-2 animate-fadeIn">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
               <span className="text-emerald-300 font-bold">
-                DEMO TEST FEED ACTIVE (Costa Rica 4K Wildlife & Telephoto Optics)
+                4K DEMO TEST FEED ACTIVE (Wildlife Optics Test)
               </span>
               <span className="text-neutral-300 text-[11px] hidden md:inline">
-                • Confirms that your browser, video player, and audio are running smoothly!
+                • Confirms that video player and browser hardware acceleration are running!
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -352,52 +537,55 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
                 }}
                 className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors shadow"
               >
-                <span>Switch to My Cam ({activeVideoId})</span>
+                <span>Switch to Live Raptor Cam</span>
               </button>
             </div>
           </div>
         ) : (
-          <div className="bg-amber-950/30 border-b border-amber-500/25 px-3.5 sm:px-4 py-2 flex items-center justify-between text-xs font-mono-tactical flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="text-neutral-200 text-[11px] font-medium">
-                Live Cam ID: <code className="text-amber-300 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800">{activeVideoId}</code>
+          <div className="bg-neutral-900/90 border-b border-neutral-800 px-3.5 sm:px-4 py-2 flex items-center justify-between text-xs font-mono-tactical flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="text-neutral-300 text-[11px]">
+                Active Feed ID: <code className="text-amber-300 bg-neutral-950 px-1.5 py-0.5 rounded border border-neutral-800 font-mono">{activeVideoId}</code>
               </span>
+              <span className="text-neutral-500 text-[11px] hidden lg:inline">•</span>
               <span className="text-neutral-400 text-[11px] hidden lg:inline">
-                If the screen is black or "Video unavailable", test with the Demo Feed or check YouTube Studio settings.
+                Camera not showing? Use quick buttons below to switch to any verified feed or your webcam.
               </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => {
-                  tacticalAudio.playRadarPing(920);
-                  setStreamMode('demo');
+                  tacticalAudio.playRadarPing(880);
+                  setCustomVideoId(PEREGRINE_UK_VIDEO_ID);
+                  setStreamMode('video');
                 }}
-                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
-                title="Verify video playback with live demo stream"
+                className="px-2 py-0.5 rounded bg-neutral-950 hover:bg-neutral-800 text-amber-300 border border-neutral-750 text-[10px] cursor-pointer"
+                title="Switch to UK Peregrine Live Stream"
               >
-                <Play className="w-3 h-3 fill-current" />
-                <span>Test Live Demo Feed</span>
+                🦅 Peregrine
               </button>
-              <a
-                href={resolvedChannelUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
-                title="Visit public YouTube channel in new tab"
-              >
-                <span>Channel ↗</span>
-              </a>
               <button
                 type="button"
                 onClick={() => {
-                  tacticalAudio.playRadarPing(800);
-                  setShowTroubleshootModal(true);
+                  tacticalAudio.playRadarPing(880);
+                  setCustomVideoId(EAGLE_LIVE_VIDEO_ID);
+                  setStreamMode('video');
                 }}
-                className="text-amber-400 hover:text-amber-300 text-[11px] underline cursor-pointer font-semibold"
+                className="px-2 py-0.5 rounded bg-neutral-950 hover:bg-neutral-800 text-amber-300 border border-neutral-750 text-[10px] cursor-pointer"
+                title="Switch to Bald Eagle Nest Live Stream"
               >
-                Setup Guide
+                🦅 Eagle Nest
+              </button>
+              <button
+                type="button"
+                onClick={() => startDeviceCamera()}
+                className="px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-600/50 text-[10px] cursor-pointer flex items-center gap-1"
+                title="Turn on device camera / webcam"
+              >
+                <Camera className="w-3 h-3" />
+                <span>Webcam</span>
               </button>
             </div>
           </div>
@@ -409,12 +597,12 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="font-semibold text-neutral-200 flex items-center gap-1.5">
                 <Video className="w-4 h-4 text-amber-400" />
-                Live Camera Source &amp; YouTube Channel Links:
+                Live Camera Source &amp; Custom Stream Setup:
               </span>
               <div className="flex items-center gap-2 text-[11px]">
                 <span className="text-neutral-400">
-                  Active Mode: <strong className={streamMode === 'channel' ? 'text-red-400' : streamMode === 'demo' ? 'text-emerald-400' : 'text-amber-400'}>
-                    {streamMode === 'channel' ? 'YouTube Channel Broadcast' : streamMode === 'demo' ? 'Live Demo Cam' : 'Direct Camera Rig'}
+                  Active Mode: <strong className={streamMode === 'channel' ? 'text-red-400' : streamMode === 'demo' ? 'text-emerald-400' : streamMode === 'webcam' ? 'text-cyan-400' : 'text-amber-400'}>
+                    {streamMode === 'channel' ? 'YouTube Channel Broadcast' : streamMode === 'demo' ? '4K Demo Cam' : streamMode === 'webcam' ? 'Device Camera (Webcam)' : 'Live Stream'}
                   </strong>
                 </span>
                 <span className="text-neutral-400 font-mono">
@@ -423,53 +611,82 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
               </div>
             </div>
 
-            {/* Quick Preset Buttons */}
-            <div className="flex items-center gap-2 flex-wrap pb-1 border-b border-neutral-800">
-              <span className="text-neutral-400 text-[11px]">Quick Feeds:</span>
-              <button
-                type="button"
-                onClick={() => {
-                  tacticalAudio.playRadarPing(880);
-                  setCustomVideoId(DEFAULT_CAMERA_VIDEO_ID);
-                  setStreamMode('video');
-                }}
-                className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-750 border border-neutral-700 text-amber-300 text-[11px] font-semibold cursor-pointer"
-              >
-                📹 Reset to My Cam (9gkrkcqHQ78)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  tacticalAudio.playRadarPing(920);
-                  setStreamMode('demo');
-                }}
-                className="px-2 py-1 rounded bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-600/50 text-emerald-300 text-[11px] font-semibold cursor-pointer"
-              >
-                🌿 Load Working 4K Demo Cam
-              </button>
-              <a
-                href={`https://www.youtube.com/watch?v=${activeVideoId}`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-750 border border-neutral-700 text-neutral-300 hover:text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-              >
-                <span>Watch on YouTube ↗</span>
-              </a>
+            {/* Quick Presets Carousel */}
+            <div className="space-y-1.5">
+              <span className="text-neutral-400 text-[11px] block">Verified 24/7 Optical Raptor Feeds (1-Click Switch):</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {POPULAR_CAMERA_PRESETS.map((preset) => {
+                  const isCurrent = activeVideoId === preset.videoId && streamMode === 'video';
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => {
+                        tacticalAudio.playRadarPing(880);
+                        if (isDeviceCamActive) stopDeviceCamera();
+                        setCustomVideoId(preset.videoId);
+                        setCustomChannelInput(preset.channelUrl);
+                        setStreamMode('video');
+                      }}
+                      className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                        isCurrent
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-200 font-bold ring-1 ring-amber-500/50'
+                          : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-neutral-700 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[10px] mb-0.5">
+                        <span className="text-amber-400 font-bold uppercase">{preset.species.split(' ')[0]}</span>
+                        <span className="text-emerald-400 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                          LIVE
+                        </span>
+                      </div>
+                      <div className="font-bold text-xs truncate">{preset.name}</div>
+                      <div className="text-[10px] text-neutral-400 truncate">{preset.location}</div>
+                    </button>
+                  );
+                })}
+
+                {/* Device Camera Card in Carousel */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    tacticalAudio.playRadarPing(880);
+                    startDeviceCamera();
+                  }}
+                  className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                    isDeviceCamActive
+                      ? 'bg-cyan-500/20 border-cyan-500 text-cyan-200 font-bold ring-1 ring-cyan-500/50'
+                      : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-cyan-500/50 hover:text-cyan-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-[10px] mb-0.5">
+                    <span className="text-cyan-400 font-bold uppercase">DEVICE SENSOR</span>
+                    <span className="text-cyan-400 font-mono">LOCAL</span>
+                  </div>
+                  <div className="font-bold text-xs truncate flex items-center gap-1">
+                    <Camera className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>My Device Camera / Webcam</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-400 truncate">Phone back-camera or laptop webcam</div>
+                </button>
+              </div>
             </div>
 
-            {/* Field 1: Camera Video / Stream URL */}
-            <div className="space-y-1">
+            {/* Field 1: Custom Video / Livestream Input */}
+            <div className="space-y-1 pt-1 border-t border-neutral-800">
               <label className="text-[11px] text-neutral-300 font-medium flex items-center justify-between">
-                <span>1. Camera Video / Livestream Link or 11-char ID:</span>
-                <span className="text-[10px] text-neutral-400 font-sans">e.g. https://www.youtube.com/watch?v=9gkrkcqHQ78 or 9gkrkcqHQ78</span>
+                <span>Custom Stream Link, YouTube Video ID, or Local IP:</span>
+                <span className="text-[10px] text-neutral-400 font-sans">e.g. https://www.youtube.com/watch?v=GAxREl6-fJs or 192.168.0.167</span>
               </label>
               <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Paste YouTube livestream URL (studio / watch / live) or 11-char ID..."
+                  placeholder="Paste YouTube livestream URL (watch / live / studio), 11-char ID, or IP..."
                   value={customVideoId}
                   onChange={(e) => {
-                    const val = extractYouTubeVideoId(e.target.value);
+                    const raw = e.target.value;
+                    const val = isLocalIpAddress(raw) ? raw : extractYouTubeVideoId(raw);
                     setCustomVideoId(val);
                   }}
                   className="flex-1 bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-1.5 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500 font-mono text-xs"
@@ -478,11 +695,12 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
                   type="button"
                   onClick={() => {
                     tacticalAudio.playRadarPing(880);
-                    setCustomVideoId('9gkrkcqHQ78');
+                    setCustomVideoId(DEFAULT_CAMERA_VIDEO_ID);
+                    setStreamMode('video');
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-750 border border-neutral-700 text-amber-300 text-xs font-mono cursor-pointer transition-colors whitespace-nowrap"
                 >
-                  Reset 9gkrkcqHQ78
+                  Reset Default
                 </button>
                 {customVideoId && (
                   <button
@@ -496,16 +714,16 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
               </div>
             </div>
 
-            {/* Field 2: YouTube Channel Link or Channel ID */}
+            {/* Field 2: YouTube Channel Link */}
             <div className="space-y-1">
               <label className="text-[11px] text-neutral-300 font-medium flex items-center justify-between">
-                <span>2. YouTube Channel URL, Handle (@name), or Channel ID (UC...):</span>
-                <span className="text-[10px] text-neutral-400 font-sans">Enables 1-click visit &amp; channel live stream embedding</span>
+                <span>YouTube Channel URL or Handle (@name):</span>
+                <span className="text-[10px] text-neutral-400 font-sans">Connects the "Visit Channel" button directly</span>
               </label>
               <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Paste YouTube Channel URL (e.g. https://youtube.com/@channel or UC...) or watch link..."
+                  placeholder="Paste YouTube Channel URL (e.g. https://youtube.com/@channelName) or watch link..."
                   value={customChannelInput}
                   onChange={(e) => setCustomChannelInput(e.target.value)}
                   className="flex-1 bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-1.5 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-red-500 font-mono text-xs"
@@ -517,16 +735,15 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
                   onClick={() => tacticalAudio.playRadarPing(880)}
                   className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap shadow-sm"
                 >
-                  <span>Open Channel ↗</span>
+                  <span>Open ↗</span>
                 </a>
               </div>
             </div>
 
-            {/* Quick helper tip */}
             <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1 border-t border-neutral-800/80 flex-wrap gap-2">
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 text-emerald-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                <span>Both live camera stream and channel page stay synchronized across your visits.</span>
+                <span>Camera choice automatically persists across visits.</span>
               </span>
               <button
                 type="button"
@@ -534,7 +751,7 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
                   tacticalAudio.playRadarPing(700);
                   setShowFeedInput(false);
                 }}
-                className="text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                className="text-amber-400 hover:text-amber-300 underline cursor-pointer font-bold"
               >
                 Done / Save
               </button>
@@ -542,44 +759,215 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
           </div>
         )}
 
-        {/* Video Player */}
-        <div className="relative aspect-video bg-black overflow-hidden">
-          <iframe
-            title="Barbury Castle Summit Live Cam"
-            src={activeEmbedSrc}
-            className="w-full h-full border-0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            allowFullScreen
-          />
+        {/* Video Player & Optical Stage Canvas */}
+        <div className="relative aspect-video bg-black overflow-hidden group">
+          {/* CASE A: Device Camera (Webcam / Phone Spotter) */}
+          {streamMode === 'webcam' ? (
+            <div className="relative w-full h-full bg-neutral-950 overflow-hidden flex items-center justify-center">
+              {deviceCamLoading && (
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-neutral-950/90 text-neutral-300 space-y-2">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                  <p className="font-mono-tactical text-xs">Initializing device camera stream...</p>
+                </div>
+              )}
 
-          {/* Clean Camera Preset Label */}
-          <div className="absolute bottom-2 left-2 pointer-events-none bg-neutral-950/80 backdrop-blur-md border border-neutral-800 px-2.5 py-1 rounded-lg text-[10px] font-mono-tactical text-neutral-300 flex items-center gap-2">
-            <span>Angle: <strong className="text-amber-300">{activePreset.shortName}</strong></span>
-            <span className="text-neutral-600">|</span>
-            <span className="text-emerald-400 font-bold">
-              {streamMode === 'channel' ? 'CHANNEL FEED' : streamMode === 'demo' ? 'DEMO TEST FEED' : 'STATION RIG'}
-            </span>
-          </div>
+              {deviceCamError ? (
+                <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-3 bg-neutral-950 text-neutral-200">
+                  <div className="w-12 h-12 rounded-2xl bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <h4 className="font-display-tactical text-base font-bold text-rose-300">
+                    Camera Access Needed
+                  </h4>
+                  <p className="text-xs text-neutral-400 max-w-md leading-relaxed font-sans">
+                    {deviceCamError}
+                  </p>
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => startDeviceCamera()}
+                      className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold text-xs cursor-pointer transition-colors"
+                    >
+                      Retry Camera
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopDeviceCamera();
+                        setStreamMode('video');
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl bg-neutral-900 border border-neutral-750 text-neutral-300 text-xs cursor-pointer hover:bg-neutral-800"
+                    >
+                      Return to Live Stream
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="relative w-full h-full overflow-hidden flex items-center justify-center bg-black">
+                  <video
+                    ref={deviceVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover transition-transform duration-200"
+                    style={{ transform: `scale(${deviceCamZoom})` }}
+                  />
 
-          {/* Live Watermark / Channel Link (Bottom-Right overlay) */}
-          <div className="absolute bottom-2 right-2 bg-neutral-950/85 backdrop-blur-md border border-neutral-800 px-2.5 py-1 rounded-lg text-[10px] font-mono-tactical text-neutral-300 flex items-center gap-1.5">
-            <a
-              href={resolvedChannelUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-red-400 hover:text-red-300 font-bold flex items-center gap-1 hover:underline cursor-pointer"
-            >
-              <span>Watch on YouTube</span>
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          </div>
+                  {/* Optical Reticle Crosshair */}
+                  {isReticleActive && (
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                      <div className="relative w-32 h-32 border border-cyan-400/40 rounded-full flex items-center justify-center">
+                        <div className="w-full h-[1px] bg-cyan-400/40"></div>
+                        <div className="h-full w-[1px] bg-cyan-400/40 absolute"></div>
+                        <div className="w-3 h-3 border border-cyan-300/80 rounded-full"></div>
+                      </div>
+                      <div className="absolute top-4 left-4 bg-neutral-950/80 px-2.5 py-1 rounded-lg border border-cyan-500/40 font-mono-tactical text-[10px] text-cyan-300 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+                        <span>SPOTTER HUD • {deviceCamZoom.toFixed(1)}x MAGNIFICATION</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* On-Screen Zoom & Optics Toolbar (Bottom floating) */}
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-neutral-950/85 backdrop-blur-md border border-neutral-700/80 px-3 py-1.5 rounded-2xl flex items-center gap-3 text-xs font-mono-tactical text-neutral-200 shadow-2xl">
+                    <div className="flex items-center gap-1.5">
+                      <ZoomOut className="w-3.5 h-3.5 text-neutral-400" />
+                      <input
+                        type="range"
+                        min="1"
+                        max="5"
+                        step="0.1"
+                        value={deviceCamZoom}
+                        onChange={(e) => setDeviceCamZoom(parseFloat(e.target.value))}
+                        className="w-20 sm:w-28 accent-cyan-400 cursor-pointer"
+                        title="Digital Zoom Magnification"
+                      />
+                      <ZoomIn className="w-3.5 h-3.5 text-cyan-400" />
+                      <span className="text-cyan-300 font-bold min-w-[32px] text-[11px]">
+                        {deviceCamZoom.toFixed(1)}x
+                      </span>
+                    </div>
+
+                    <span className="text-neutral-600">|</span>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsReticleActive(!isReticleActive)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors ${
+                        isReticleActive ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-neutral-400'
+                      }`}
+                    >
+                      Reticle: {isReticleActive ? 'ON' : 'OFF'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={takeSnapshot}
+                      className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors shadow"
+                      title="Take snapshot photo"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span className="hidden sm:inline">Snap</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : isLocalIpAddress(activeVideoId) ? (
+            /* CASE B: Local Home Network IP Camera (Static IP) */
+            <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-neutral-900 via-neutral-950 to-neutral-950 text-neutral-200 space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shadow-xl shadow-cyan-500/10">
+                <Wifi className="w-7 h-7 animate-pulse" />
+              </div>
+
+              <div className="space-y-1.5 max-w-md">
+                <div className="flex items-center justify-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+                  <span className="text-[10px] font-mono-tactical font-bold text-cyan-300 uppercase tracking-wider">
+                    LOCAL HOME WI-FI CAMERA
+                  </span>
+                </div>
+                <h3 className="font-display-tactical text-lg sm:text-xl font-bold text-neutral-100 font-mono">
+                  {formatLocalIpUrl(activeVideoId)}
+                </h3>
+                <p className="text-xs text-neutral-300 leading-relaxed font-sans">
+                  This camera is located on your private local router network. Modern web browsers block secure HTTPS websites from embedding insecure HTTP devices in iframes, but you can launch your camera live portal directly in a tab:
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                <a
+                  href={formatLocalIpUrl(activeVideoId)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-display-tactical text-xs font-bold tracking-wider flex items-center gap-2 transition-all shadow-lg shadow-cyan-500/20 cursor-pointer"
+                >
+                  <span>Open Camera Live View ({formatLocalIpUrl(activeVideoId)})</span>
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+
+                <button
+                  onClick={() => {
+                    tacticalAudio.playRadarPing(800);
+                    setCustomVideoId(DEFAULT_CAMERA_VIDEO_ID);
+                    setStreamMode('video');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-850 border border-neutral-750 text-neutral-300 hover:text-amber-300 text-xs font-mono-tactical transition-colors cursor-pointer"
+                >
+                  Return to Live Raptor Cam
+                </button>
+              </div>
+
+              <div className="p-3 rounded-xl bg-neutral-900/80 border border-neutral-800 text-[11px] text-neutral-400 max-w-md text-left space-y-1 font-sans">
+                <strong className="text-amber-300 block font-mono-tactical text-[10px]">
+                  STREAMING TO OTHER OBSERVERS:
+                </strong>
+                <p className="leading-relaxed">
+                  To broadcast your camera to all RaptorLens visitors across Britain: connect your camera RTSP feed into free <strong>OBS Studio</strong> and stream to <strong>YouTube Live</strong>, then paste that YouTube stream link here.
+                </p>
+              </div>
+            </div>
+          ) : (
+            /* CASE C: Standard Embed Player */
+            <>
+              <iframe
+                title="Barbury Castle Summit Live Cam"
+                src={activeEmbedSrc}
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+
+              {/* Clean Camera Preset Label */}
+              <div className="absolute bottom-2 left-2 pointer-events-none bg-neutral-950/80 backdrop-blur-md border border-neutral-800 px-2.5 py-1 rounded-lg text-[10px] font-mono-tactical text-neutral-300 flex items-center gap-2 shadow-lg">
+                <span>Angle: <strong className="text-amber-300">{activePreset.shortName}</strong></span>
+                <span className="text-neutral-600">|</span>
+                <span className="text-emerald-400 font-bold">
+                  {streamMode === 'channel' ? 'CHANNEL FEED' : streamMode === 'demo' ? '4K DEMO' : 'LIVE FEED'}
+                </span>
+              </div>
+
+              {/* Live Watermark / Channel Link (Bottom-Right overlay) */}
+              <div className="absolute bottom-2 right-2 bg-neutral-950/85 backdrop-blur-md border border-neutral-800 px-2.5 py-1 rounded-lg text-[10px] font-mono-tactical text-neutral-300 flex items-center gap-1.5 shadow-lg">
+                <a
+                  href={resolvedChannelUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-red-400 hover:text-red-300 font-bold flex items-center gap-1 hover:underline cursor-pointer"
+                >
+                  <span>Watch on YouTube</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Quick Optical Preset Switcher */}
         <div className="p-2.5 bg-neutral-900/80 border-t border-neutral-800 flex items-center justify-between gap-2 text-xs font-mono-tactical flex-wrap">
           <span className="text-neutral-400 text-[11px] font-medium flex items-center gap-1">
             <Navigation className="w-3.5 h-3.5 text-amber-400" />
-            Camera Presets:
+            Camera Presets &amp; Targets:
           </span>
           <div className="flex items-center gap-1.5 flex-wrap">
             {BARBURY_PTZ_PRESETS.map((preset, idx) => (
@@ -610,30 +998,43 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-neutral-100">
-                  {currentCam.channelName}
+                  {streamMode === 'webcam' ? 'Local Device Camera' : currentCam.channelName}
                 </span>
-                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-600/20 text-red-300 border border-red-500/40">
-                  OFFICIAL BROADCAST
+                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  {streamMode === 'webcam' ? 'LOCAL SENSOR' : 'OFFICIAL BROADCAST'}
                 </span>
               </div>
               <p className="text-[10px] text-neutral-400 font-sans mt-0.5">
-                Live telephoto feed from the Wiltshire downs • Stream ID: <code className="text-amber-300">{activeVideoId}</code>
+                {streamMode === 'webcam'
+                  ? 'Real-time camera feed running directly on this device'
+                  : `Live telephoto feed from the Wiltshire downs • Stream ID: ${activeVideoId}`}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <a
-              href={resolvedChannelUrl}
-              target="_blank"
-              rel="noreferrer"
-              onClick={() => tacticalAudio.playRadarPing(880)}
-              className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Visit YouTube Channel</span>
-              <ExternalLink className="w-3 h-3 text-red-200" />
-            </a>
+            {streamMode === 'webcam' ? (
+              <button
+                type="button"
+                onClick={takeSnapshot}
+                className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Save Snapshot</span>
+              </button>
+            ) : (
+              <a
+                href={resolvedChannelUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => tacticalAudio.playRadarPing(880)}
+                className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Visit YouTube Channel</span>
+                <ExternalLink className="w-3 h-3 text-red-200" />
+              </a>
+            )}
           </div>
         </div>
       </div>
@@ -986,46 +1387,102 @@ export const SummitTrailConditionsView: React.FC<SummitTrailConditionsViewProps>
 
             <div className="space-y-3 font-sans text-xs text-neutral-300 leading-relaxed">
               <p>
-                Your camera link was entered as <code className="text-amber-300 bg-neutral-950 px-1.5 py-0.5 rounded border border-neutral-800 font-mono text-[11px]">{activeVideoId}</code>. In YouTube, embedded website streams require 3 quick checks:
+                If your camera stream is black or says <strong>"Video unavailable"</strong>, here is why and how to fix it immediately:
               </p>
 
-              <div className="space-y-2.5 font-mono-tactical text-[11px]">
-                <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
-                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                    <span>1. Encoder Not Streaming Yet:</span>
-                  </div>
-                  <p className="font-sans text-neutral-400">
-                    YouTube Studio creates the link ahead of time, but the player stays black until your camera or OBS streaming software clicks <strong>"Start Streaming"</strong> and sends video packets to YouTube.
-                  </p>
-                </div>
+              {/* 1-Click Instant Solutions */}
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+                <span className="font-bold text-amber-300 flex items-center gap-1.5 font-mono-tactical text-[11px]">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span>1-Click Instant Fixes (Try Now):</span>
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 font-mono-tactical text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      tacticalAudio.playRadarPing(880);
+                      setCustomVideoId(PEREGRINE_UK_VIDEO_ID);
+                      setStreamMode('video');
+                      setShowTroubleshootModal(false);
+                    }}
+                    className="p-2 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-amber-500/50 text-amber-300 text-left cursor-pointer flex items-center justify-between"
+                  >
+                    <span>🦅 UK Peregrine Cam</span>
+                    <span className="text-[10px] text-emerald-400 font-bold">24/7 LIVE</span>
+                  </button>
 
-                <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
-                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                    <span>2. Stream Visibility Must Be "Public" or "Unlisted":</span>
-                  </div>
-                  <p className="font-sans text-neutral-400">
-                    If set to <strong>"Private"</strong> in YouTube Studio, YouTube blocks embedding on other websites. Set it to <strong>"Public"</strong> (visible everywhere) or <strong>"Unlisted"</strong> (only visible on your website).
-                  </p>
-                </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      tacticalAudio.playRadarPing(880);
+                      setCustomVideoId(EAGLE_LIVE_VIDEO_ID);
+                      setStreamMode('video');
+                      setShowTroubleshootModal(false);
+                    }}
+                    className="p-2 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-amber-500/50 text-amber-300 text-left cursor-pointer flex items-center justify-between"
+                  >
+                    <span>🦅 Bald Eagle Nest</span>
+                    <span className="text-[10px] text-emerald-400 font-bold">24/7 LIVE</span>
+                  </button>
 
-                <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
-                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                    <span>3. Enable "Allow Embedding":</span>
-                  </div>
-                  <p className="font-sans text-neutral-400">
-                    In YouTube Studio &gt; Stream Settings &gt; Additional Settings &gt; make sure the <strong>"Allow embedding"</strong> box is checked.
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      tacticalAudio.playRadarPing(880);
+                      setShowTroubleshootModal(false);
+                      startDeviceCamera();
+                    }}
+                    className="p-2 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-300 text-left cursor-pointer flex items-center justify-between"
+                  >
+                    <span className="flex items-center gap-1">
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Use My Device Webcam</span>
+                    </span>
+                    <span className="text-[10px] text-cyan-400 font-bold">DEVICE</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      tacticalAudio.playRadarPing(920);
+                      setStreamMode('demo');
+                      setShowTroubleshootModal(false);
+                    }}
+                    className="p-2 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 text-left cursor-pointer flex items-center justify-between"
+                  >
+                    <span>🌿 4K Nature Demo</span>
+                    <span className="text-[10px] text-emerald-400 font-bold">TEST</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-200 space-y-1 text-xs">
-                <span className="font-bold flex items-center gap-1.5 font-mono-tactical text-[11px] text-emerald-300">
-                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Verify Website Video Playback Right Now:</span>
-                </span>
-                <p className="font-sans text-neutral-300 text-[11px]">
-                  Click <strong>"Test Live Demo Cam"</strong> to verify that this website and your browser play video and audio with full 4K optics controls!
-                </p>
+              <div className="space-y-2 font-mono-tactical text-[11px]">
+                <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                    <span>1. Stream Ended or Offline:</span>
+                  </div>
+                  <p className="font-sans text-neutral-400">
+                    Live broadcasts on YouTube can be restarted or taken offline by their operators. If a stream has finished, click either of the 1-click verified feeds above.
+                  </p>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                    <span>2. Local Home Network (IP) Cameras:</span>
+                  </div>
+                  <p className="font-sans text-neutral-400">
+                    If you entered a local router address like <code>192.168.x.x</code>, modern browsers forbid HTTPS websites from silently embedding insecure HTTP cameras. Click the "Open Camera Live View" button to view it directly, or stream it to YouTube using OBS Studio.
+                  </p>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                    <span>3. Browser Permissions &amp; Adblockers:</span>
+                  </div>
+                  <p className="font-sans text-neutral-400">
+                    If using your device camera, make sure you clicked <strong>"Allow"</strong> when prompted. If YouTube is blocked, disable third-party cookie blocking or adblock extensions for this site.
+                  </p>
+                </div>
               </div>
             </div>
 

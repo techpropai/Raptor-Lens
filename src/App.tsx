@@ -43,7 +43,14 @@ import { tacticalAudio } from './utils/audio';
 import ridgewayLandscapeImg from './assets/images/ridgeway_landscape_1788791918648.jpg';
 import { evaluateCoordinatePrivacy } from './utils/schedule1Privacy';
 import { trackEvent } from './utils/analytics';
-import { getYouTubeChannelUrl } from './utils/youtube';
+import { getYouTubeChannelUrl, DEFAULT_CAMERA_VIDEO_ID } from './utils/youtube';
+import { 
+  seedSightingsIfEmpty, 
+  subscribeToSightings, 
+  saveSightingToFirestore,
+  addCorroborationToFirestore 
+} from './services/sightingsFirestore';
+import { validateFirestoreConnection } from './services/firebase';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dispatches');
@@ -181,7 +188,7 @@ export default function App() {
     }
   });
 
-  // Sightings state with localStorage persistence and Schedule 1 privacy audit
+  // Sightings state with Firestore synchronization and Schedule 1 privacy audit
   const [sightings, setSightings] = useState<SightingLog[]>(() => {
     try {
       const saved = localStorage.getItem('raptorlens_sightings');
@@ -199,9 +206,29 @@ export default function App() {
           baseSightings = INITIAL_SIGHTINGS;
         }
       }
-      // Guarantee all sightings conform to Schedule 1 protection and sanitize coordinates
-      return baseSightings
-        .map((s) => {
+      return baseSightings;
+    } catch {
+      return INITIAL_SIGHTINGS;
+    }
+  });
+
+  const [isFirestoreConnected, setIsFirestoreConnected] = useState<boolean>(false);
+
+  // Initialize Firestore connection and real-time subscription
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    async function initFirestore() {
+      const ok = await validateFirestoreConnection();
+      setIsFirestoreConnected(ok);
+      if (ok) {
+        // Seed initial sightings if empty so Firestore is immediately populated
+        await seedSightingsIfEmpty();
+      }
+
+      // Realtime listener for sightings
+      unsubscribe = subscribeToSightings((incoming) => {
+        setSightings(incoming.map((s) => {
           const rawLat = (s.coordinates && Array.isArray(s.coordinates) && s.coordinates.length >= 2) ? Number(s.coordinates[0]) : NaN;
           const rawLng = (s.coordinates && Array.isArray(s.coordinates) && s.coordinates.length >= 2) ? Number(s.coordinates[1]) : NaN;
           let safeCoords: [number, number];
@@ -227,18 +254,16 @@ export default function App() {
             isFuzzed: privacy.fuzzed,
             privacyRadiusKm: privacy.fuzzRadiusKm,
           };
-        })
-        .filter(
-          (s) =>
-            s.coordinates &&
-            Array.isArray(s.coordinates) &&
-            Number.isFinite(Number(s.coordinates[0])) &&
-            Number.isFinite(Number(s.coordinates[1]))
-        );
-    } catch {
-      return INITIAL_SIGHTINGS;
+        }));
+      }, INITIAL_SIGHTINGS);
     }
-  });
+
+    initFirestore();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   // Dispatches state with localStorage persistence
   const [dispatches, setDispatches] = useState<RssDispatch[]>(() => {
@@ -451,6 +476,11 @@ export default function App() {
     };
 
     setSightings((prev) => [processedSighting, ...prev]);
+
+    // Asynchronously save to Firestore database
+    saveSightingToFirestore(processedSighting).catch((err) => {
+      console.warn('Could not sync sighting to Firestore, retained locally:', err);
+    });
 
     trackEvent('sighting_logged', `Sighting Logged: ${newSighting.count}x ${newSighting.speciesName} at ${newSighting.locationName}`, {
       species: newSighting.speciesName,
@@ -684,6 +714,11 @@ export default function App() {
           if (auditSighting?.id === s.id) {
             setAuditSighting(updatedSighting);
           }
+
+          // Persist corroboration update to Firestore
+          addCorroborationToFirestore(sightingId, newCorrob).catch((err) => {
+            console.warn('Could not sync corroboration to Firestore:', err);
+          });
 
           return updatedSighting;
         }
@@ -1294,10 +1329,10 @@ export default function App() {
                   try {
                     return getYouTubeChannelUrl(
                       localStorage.getItem('raptorlens_channel_url') || '',
-                      localStorage.getItem('raptorlens_custom_cam') || '9gkrkcqHQ78'
+                      localStorage.getItem('raptorlens_custom_cam') || DEFAULT_CAMERA_VIDEO_ID
                     );
                   } catch {
-                    return 'https://www.youtube.com/watch?v=9gkrkcqHQ78';
+                    return `https://www.youtube.com/watch?v=${DEFAULT_CAMERA_VIDEO_ID}`;
                   }
                 })()}
                 target="_blank"

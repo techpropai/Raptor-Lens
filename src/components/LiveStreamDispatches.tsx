@@ -91,7 +91,9 @@ export const LiveStreamDispatches: React.FC<LiveStreamDispatchesProps> = ({
   const [selectedChannelId, setSelectedChannelId] = useState<string>(channels[0]?.id || 'stream-barbury-castle-livecam');
   const [customVideoId, setCustomVideoId] = useState<string>(() => {
     try {
-      return localStorage.getItem('raptorlens_custom_cam') || '';
+      const saved = localStorage.getItem('raptorlens_custom_cam') || '';
+      if (saved === '9gkrkcqHQ78') return DEFAULT_CAMERA_VIDEO_ID;
+      return saved;
     } catch {
       return '';
     }
@@ -715,11 +717,11 @@ export const LiveStreamDispatches: React.FC<LiveStreamDispatchesProps> = ({
                   type="button"
                   onClick={() => {
                     tacticalAudio.playRadarPing(880);
-                    setCustomVideoId('9gkrkcqHQ78');
+                    setCustomVideoId(DEFAULT_CAMERA_VIDEO_ID);
                   }}
                   className="px-2 py-0.5 rounded bg-neutral-950 hover:bg-neutral-800 border border-amber-500/50 text-amber-300 font-mono text-[10px] cursor-pointer transition-colors"
                 >
-                  + Field Rig Stream (9gkrkcqHQ78)
+                  + UK Peregrine Cam ({DEFAULT_CAMERA_VIDEO_ID})
                 </button>
                 <button
                   type="button"
@@ -973,7 +975,7 @@ export const LiveStreamDispatches: React.FC<LiveStreamDispatchesProps> = ({
                       ? 'bg-amber-500 text-neutral-950 font-bold'
                       : 'text-neutral-400 hover:text-neutral-200'
                   }`}
-                  title="Play camera stream feed (9gkrkcqHQ78)"
+                  title="Play live camera stream feed"
                 >
                   📹 Rig
                 </button>

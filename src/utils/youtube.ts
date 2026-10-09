@@ -1,12 +1,81 @@
 /**
- * YouTube integration utilities for RaptorLens UK:
+ * YouTube and Camera integration utilities for RaptorLens UK:
  * Handles stream URL parsing, studio livestreams, channel info extraction,
- * and reliable embedded playback.
+ * device webcam inputs, and reliable embedded playback.
  */
 
-export const DEFAULT_CAMERA_VIDEO_ID = '9gkrkcqHQ78';
-export const DEMO_NATURE_VIDEO_ID = 'LXb3EKWsInQ'; // Verified embeddable 4K nature & wildlife footage
-export const DEMO_LIVE_VIDEO_ID = '21X5lGlDOfg';   // NASA Earth Live HD broadcast
+// Verified 24/7 active live raptor & wildlife streams
+export const DEFAULT_CAMERA_VIDEO_ID = 'GAxREl6-fJs'; // Buckinghamshire UK Peregrine Falcon Live Cam
+export const PEREGRINE_UK_VIDEO_ID = 'GAxREl6-fJs';   // Buckinghamshire UK Peregrine Falcon
+export const OSPREY_UK_VIDEO_ID = 'ZEWqlgElhN0';       // Loch of the Lowes UK Osprey Live Cam
+export const EAGLE_LIVE_VIDEO_ID = 'B4-L2nfGcuE';      // Big Bear Bald Eagle Live Nest
+export const CORNELL_FEEDER_VIDEO_ID = 'x10vL6_47Dw';  // Cornell Lab Live FeederWatch
+export const DEMO_NATURE_VIDEO_ID = '4kRzwJXaeIM';     // Verified 4K 60fps Bird & Wildlife Live Cam
+export const DEMO_LIVE_VIDEO_ID = '21X5lGlDOfg';       // NASA Earth Live HD broadcast
+
+export interface CameraPresetOption {
+  id: string;
+  name: string;
+  videoId: string;
+  channelName: string;
+  channelUrl: string;
+  species: string;
+  location: string;
+  description: string;
+}
+
+export const POPULAR_CAMERA_PRESETS: CameraPresetOption[] = [
+  {
+    id: 'uk-peregrine',
+    name: 'UK Peregrine Falcon Live Cam (Cam 1)',
+    videoId: PEREGRINE_UK_VIDEO_ID,
+    channelName: 'Buckinghamshire Council Peregrines',
+    channelUrl: 'https://www.youtube.com/watch?v=GAxREl6-fJs',
+    species: 'Peregrine Falcon (Falco peregrinus)',
+    location: 'Buckinghamshire, UK',
+    description: 'Direct high-definition optical nest camera monitoring resident UK Peregrine Falcons hunting and roosting.',
+  },
+  {
+    id: 'uk-osprey',
+    name: 'UK Osprey Nest Live Cam',
+    videoId: OSPREY_UK_VIDEO_ID,
+    channelName: 'Scottish Wildlife Trust',
+    channelUrl: 'https://www.youtube.com/watch?v=ZEWqlgElhN0',
+    species: 'Western Osprey (Pandion haliaetus)',
+    location: 'Loch of the Lowes, Scotland, UK',
+    description: 'Renowned 24/7 telephoto wildlife camera trained on breeding tree-top Osprey aerie.',
+  },
+  {
+    id: 'bald-eagle',
+    name: 'Big Bear Bald Eagle Nest Cam (30x Optical)',
+    videoId: EAGLE_LIVE_VIDEO_ID,
+    channelName: 'Friends of Big Bear Valley',
+    channelUrl: 'https://www.youtube.com/watch?v=B4-L2nfGcuE',
+    species: 'Bald Eagle (Haliaeetus leucocephalus)',
+    location: 'High Altitude Pine Canopy (2,050m ASL)',
+    description: 'World-famous 24/7 solar-powered telephoto PTZ camera observing hunting raptors and active clutch.',
+  },
+  {
+    id: 'cornell-feeder',
+    name: 'Cornell Lab Wild Bird Sanctuary Live Cam',
+    videoId: CORNELL_FEEDER_VIDEO_ID,
+    channelName: 'Cornell Lab of Ornithology',
+    channelUrl: 'https://www.youtube.com/watch?v=x10vL6_47Dw',
+    species: 'Mixed Raptors & Woodland Avifauna',
+    location: 'Sapsucker Woods Sanctuary',
+    description: 'High-definition optical bird cam with directional microphone for birds of prey and feeder visitors.',
+  },
+  {
+    id: 'demo-nature',
+    name: '4K Ultra-HD Nature & Wildlife Optical Stream',
+    videoId: DEMO_NATURE_VIDEO_ID,
+    channelName: 'Nature Wildlife Broadcast',
+    channelUrl: 'https://www.youtube.com/watch?v=4kRzwJXaeIM',
+    species: 'Downland & Woodland Wildlife',
+    location: 'Nature Reserve (4K 60fps)',
+    description: 'Ultra-clear 4K feed verifying video hardware acceleration and display fidelity.',
+  },
+];
 
 /**
  * Normalizes user camera inputs (YouTube full URL, short URL, studio livestream link, embed, or raw ID)
@@ -128,7 +197,20 @@ export function getYouTubeChannelUrl(channelInput?: string, videoId: string = DE
   return `https://www.youtube.com/watch?v=${videoId || DEFAULT_CAMERA_VIDEO_ID}`;
 }
 
-export type StreamPlayMode = 'video' | 'channel' | 'demo';
+export const isLocalIpAddress = (val: string): boolean => {
+  if (!val) return false;
+  const trimmed = val.trim();
+  return /^(https?:\/\/)?(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.|localhost)/i.test(trimmed);
+};
+
+export const formatLocalIpUrl = (val: string): string => {
+  const trimmed = val.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+};
+
+export type StreamPlayMode = 'video' | 'channel' | 'demo' | 'webcam';
 
 /**
  * Generates the embed URL for either a direct live video ID, a channel live stream, or a demo stream.

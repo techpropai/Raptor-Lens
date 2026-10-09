@@ -26,7 +26,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { tacticalAudio } from '../utils/audio';
-import { getYouTubeChannelUrl } from '../utils/youtube';
+import { getYouTubeChannelUrl, DEFAULT_CAMERA_VIDEO_ID } from '../utils/youtube';
 
 import { SectorId } from '../types/sector';
 import { UK_SECTORS } from '../data/sectors';
@@ -134,10 +134,10 @@ export const Navbar: React.FC<NavbarProps> = ({
     try {
       return getYouTubeChannelUrl(
         localStorage.getItem('raptorlens_channel_url') || '',
-        localStorage.getItem('raptorlens_custom_cam') || '9gkrkcqHQ78'
+        localStorage.getItem('raptorlens_custom_cam') || DEFAULT_CAMERA_VIDEO_ID
       );
     } catch {
-      return 'https://www.youtube.com/watch?v=9gkrkcqHQ78';
+      return `https://www.youtube.com/watch?v=${DEFAULT_CAMERA_VIDEO_ID}`;
     }
   })();
 

@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Sighting logs: Anyone can read, authenticated observers or visitors can submit valid sightings
+    match /sightings/{sightingId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['id', 'speciesName', 'locationName', 'observerCallsign', 'count', 'timestamp'])
+                    && request.resource.data.speciesName is string
+                    && request.resource.data.count is number
+                    && request.resource.data.count > 0;
+      allow update: if true; // Allows adding peer corroborations and audit events
+      allow delete: if false; // Sightings are permanent scientific/community records
+    }
+
+    // Spotter reports on livecams
+    match /spotterReports/{reportId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['id', 'camId', 'speciesName', 'callsign', 'count', 'timestamp'])
+                    && request.resource.data.speciesName is string
+                    && request.resource.data.count is number;
+      allow update: if true;
+      allow delete: if false;
+    }
+
+    // Group skywatch meetups
+    match /groupSkywatches/{skywatchId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['id', 'title', 'date', 'time', 'locationName', 'leaderCallsign']);
+      allow update: if true; // Allows users to join / RSVP
+      allow delete: if false;
+    }
+
+    // Camera telemetry & configs
+    match /cameraConfigs/{cameraId} {
+      allow read: if true;
+      allow write: if false; // Read-only for general clients
+    }
+  }
+}

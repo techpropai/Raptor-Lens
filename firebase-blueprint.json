@@ -1,0 +1,126 @@
+{
+  "entities": {
+    "SightingLog": {
+      "title": "SightingLog",
+      "description": "A field observation of a raptor with coordinates, behavior, species, and observer details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "speciesId": { "type": "string" },
+        "speciesName": { "type": "string" },
+        "locationName": { "type": "string" },
+        "sectorId": { "type": "string" },
+        "coordinates": {
+          "type": "array",
+          "description": "Latitude and longitude coordinates"
+        },
+        "count": { "type": "number" },
+        "behavior": { "type": "string" },
+        "altitudeM": { "type": "number" },
+        "opticalGear": { "type": "string" },
+        "observerCallsign": { "type": "string" },
+        "observerRank": { "type": "string" },
+        "observerAffiliation": { "type": "string" },
+        "notes": { "type": "string" },
+        "confidence": { "type": "string" },
+        "windDirection": { "type": "string" },
+        "windSpeedMph": { "type": "number" },
+        "thermalStrength": { "type": "string" },
+        "verificationStatus": { "type": "string" },
+        "corroborations": { "type": "array" },
+        "auditTrail": { "type": "array" }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "speciesName",
+        "locationName",
+        "observerCallsign",
+        "count"
+      ]
+    },
+    "SpotterReport": {
+      "title": "SpotterReport",
+      "description": "A live camera feed spotter report submitted by livecam watchers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "camId": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "timeAgo": { "type": "string" },
+        "callsign": { "type": "string" },
+        "speciesName": { "type": "string" },
+        "count": { "type": "number" },
+        "sectorQuadrant": { "type": "string" },
+        "description": { "type": "string" },
+        "verified": { "type": "boolean" }
+      },
+      "required": ["id", "camId", "timestamp", "callsign", "speciesName", "count"]
+    },
+    "GroupSkywatch": {
+      "title": "GroupSkywatch",
+      "description": "Scheduled group field skywatch meetups along the Wessex downlands",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "hotspotId": { "type": "string" },
+        "locationName": { "type": "string" },
+        "gridRef": { "type": "string" },
+        "leaderCallsign": { "type": "string" },
+        "targetSpecies": { "type": "array" },
+        "description": { "type": "string" },
+        "difficulty": { "type": "string" },
+        "opticsRecommended": { "type": "string" },
+        "attendees": { "type": "array" }
+      },
+      "required": ["id", "title", "date", "time", "locationName", "leaderCallsign"]
+    },
+    "CameraConfig": {
+      "title": "CameraConfig",
+      "description": "Live feed camera configuration and status details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "location": { "type": "string" },
+        "channelName": { "type": "string" },
+        "youtubeId": { "type": "string" },
+        "channelUrl": { "type": "string" },
+        "status": { "type": "string" },
+        "elevation": { "type": "string" },
+        "gridRef": { "type": "string" },
+        "viewers": { "type": "number" },
+        "distanceToSubjectKm": { "type": "number" },
+        "opticalZoom": { "type": "string" },
+        "panBearing": { "type": "string" },
+        "sensorSpecs": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "title", "youtubeId", "status"]
+    }
+  },
+  "firestore": {
+    "/sightings/{sightingId}": {
+      "schema": "SightingLog",
+      "description": "Real-time field sightings across Wessex downlands and Barbury Castle"
+    },
+    "/spotterReports/{reportId}": {
+      "schema": "SpotterReport",
+      "description": "Live spotter detections tagged on the livecam by downland observers"
+    },
+    "/groupSkywatches/{skywatchId}": {
+      "schema": "GroupSkywatch",
+      "description": "Community group skywatch meetups along the Ridgeway"
+    },
+    "/cameraConfigs/{cameraId}": {
+      "schema": "CameraConfig",
+      "description": "Telemetry and streaming details for field observation cameras"
+    }
+  }
+}
