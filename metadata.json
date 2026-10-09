@@ -1,0 +1,6 @@
+{
+  "name": "RaptorLens (SkyScout UK)",
+  "description": "Tactical ridge weather, live summit camera telemetry, and downland raptor radar for walkers, hikers, and wildlife observers across The Ridgeway National Trail and North Wessex Downs.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
